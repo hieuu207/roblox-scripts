@@ -4,132 +4,109 @@ end
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. TẠO GIAO DIỆN HIỂN THỊ ĐẾM NGƯỢC RIÊNG
+-- 1. Tạo GUI hiển thị đếm ngược nổi bật
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "LightningDetectorGui"
+screenGui.Name = "LightningWatcher"
 screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
 
--- Thử gắn vào CoreGui, nếu executor không hỗ trợ thì gắn vào PlayerGui
-local successParent = pcall(function()
-    screenGui.Parent = CoreGui
-end)
-if not successParent or not screenGui.Parent then
-    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-end
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 360, 0, 80)
+frame.Position = UDim2.new(0.5, -180, 0.05, 0)
+frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+frame.BorderSizePixel = 3
+frame.BorderColor3 = Color3.fromRGB(0, 255, 0)
+frame.Active = true
+frame.Draggable = true
+frame.Parent = screenGui
 
-local alertFrame = Instance.new("Frame")
-alertFrame.Size = UDim2.new(0, 320, 0, 90)
-alertFrame.Position = UDim2.new(0.5, -160, 0.1, 0)
-alertFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-alertFrame.BorderSizePixel = 2
-alertFrame.BorderColor3 = Color3.fromRGB(255, 170, 0)
-alertFrame.Active = true
-alertFrame.Draggable = true
-alertFrame.Parent = screenGui
+local txt = Instance.new("TextLabel")
+txt.Size = UDim2.new(1, -20, 1, -10)
+txt.Position = UDim2.new(0, 10, 0, 5)
+txt.BackgroundTransparency = 1
+txt.TextColor3 = Color3.fromRGB(255, 255, 255)
+txt.Font = Enum.Font.GothamBold
+txt.TextSize = 15
+txt.TextWrapped = true
+txt.Text = "🟢 Trạng thái: Đang theo dõi sét (An toàn)"
+txt.Parent = frame
 
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, 0, 0.35, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextSize = 14
-titleLabel.Text = "⚡ TRÌNH BẮT SỰ KIỆN SÉT ⚡"
-titleLabel.Parent = alertFrame
-
-local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -10, 0.6, 0)
-statusLabel.Position = UDim2.new(0, 5, 0.35, 0)
-statusLabel.BackgroundTransparency = 1
-statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-statusLabel.Font = Enum.Font.Gotham
-statusLabel.TextSize = 13
-statusLabel.TextWrapped = true
-statusLabel.Text = "Đang quét tín hiệu máy chủ & giao diện..."
-statusLabel.Parent = alertFrame
-
-local lastTrigger = 0
-
--- Hàm cập nhật giao diện đếm ngược
-local function triggerAlert(sourceInfo, countdownSeconds)
-    if tick() - lastTrigger < 2 then return end
-    lastTrigger = tick()
-
-    alertFrame.BorderColor3 = Color3.fromRGB(255, 0, 0)
+local isTriggered = false
+local function onLightningDetected(source)
+    if isTriggered then return end
+    isTriggered = true
     
-    task.spawn(function()
-        for i = countdownSeconds, 0, -1 do
-            statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-            statusLabel.Text = string.format("🚨 SÉT ĐÁNH TRONG: %d GIÂY!\n(%s)", i, sourceInfo)
-            task.wait(1)
-        end
-        statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-        statusLabel.Text = "Đã đánh xong! Đang tiếp tục quét..."
-        alertFrame.BorderColor3 = Color3.fromRGB(255, 170, 0)
-    end)
+    frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
+    print("[DETECTED] Phát hiện sét từ: " .. source)
+    
+    -- Game thường cho 10 giây từ lúc báo động đỏ đến lúc sét rơi
+    for i = 10, 1, -1 do
+        txt.TextColor3 = Color3.fromRGB(255, 50, 50)
+        txt.Text = string.format("⚡ BÁO ĐỘNG SÉT ĐÁNH! ⚡\nĐếm ngược: %d giây còn lại!\n(Nguồn: %s)", i, source)
+        task.wait(1)
+    end
+    
+    txt.TextColor3 = Color3.fromRGB(255, 255, 255)
+    txt.Text = "💥 SÉT ĐÃ ĐÁNH XONG! Đang theo dõi đợt tiếp theo..."
+    frame.BorderColor3 = Color3.fromRGB(0, 255, 0)
+    task.wait(3)
+    
+    isTriggered = false
+    txt.Text = "🟢 Trạng thái: Đang theo dõi sét (An toàn)"
 end
 
--- 2. HOOK TOÀN BỘ SỰ KIỆN MẠNG (REMOTE EVENTS) TỪ SERVER VỀ CLIENT
-local oldFire
-oldFire = hookmetamethod(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    local args = {...}
-
-    if (method == "FireServer" or method == "InvokeServer") then
-        local name = string.lower(tostring(self.Name))
-        if name:find("lightning") or name:find("strike") or name:find("set") or name:find("disaster") or name:find("weather") then
-            triggerAlert("Remote: " .. self.Name, 10)
+-- 2. Quét UI theo cơ chế ẨN/HIỆN (Visible / Transparency / CanvasGroup)
+local function trackUI(obj)
+    if obj:IsA("GuiObject") then
+        local lowerName = string.lower(obj.Name)
+        -- Kiểm tra tên frame có liên quan đến cảnh báo/sét
+        if lowerName:find("alert") or lowerName:find("warn") or lowerName:find("event") or lowerName:find("disaster") or lowerName:find("lightning") or lowerName:find("bao") or lowerName:find("set") then
+            obj:GetPropertyChangedSignal("Visible"):Connect(function()
+                if obj.Visible then
+                    onLightningDetected("UI Frame: " .. obj.Name)
+                end
+            end)
         end
-    end
-
-    return oldFire(self, ...)
-end)
-
--- Lắng nghe các OnClientEvent (Server gọi xuống)
-for _, obj in ipairs(game:GetDescendants()) do
-    if obj:IsA("RemoteEvent") then
-        obj.OnClientEvent:Connect(function(...)
-            local eventName = string.lower(obj.Name)
-            if eventName:find("lightning") or eventName:find("strike") or eventName:find("weather") or eventName:find("event") or eventName:find("warn") or eventName:find("alert") or eventName:find("set") then
-                triggerAlert("Server Event: " .. obj.Name, 10)
+        
+        -- Nếu là TextLabel nhưng bị ẩn và sau đó hiện lên
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local t = string.lower(obj.Text)
+            if t:find("báo động") or t:find("sét") or t:find("thu hoạch") then
+                obj:GetPropertyChangedSignal("Visible"):Connect(function()
+                    if obj.Visible then
+                        onLightningDetected("Text Visible: " .. obj.Text)
+                    end
+                end)
             end
-        end)
+        end
     end
 end
 
--- 3. QUÉT TEXT TRÊN TOÀN BỘ CÁC VÙNG BỘ NHỚ
-local function checkText(text, location)
-    if typeof(text) ~= "string" or text == "" then return end
-    local lower = string.lower(text)
+for _, v in ipairs(PlayerGui:GetDescendants()) do trackUI(v) end
+PlayerGui.DescendantAdded:Connect(trackUI)
 
-    if lower:find("sét") or lower:find("báo động") or lower:find("thu hoạch ngay") or lower:find("sét sắp") then
-        local sec = string.match(lower, "(%d+)%s*s") or string.match(lower, "trong%s*(%d+)") or string.match(lower, "%-(%d+)") or string.match(lower, "(%d+)")
-        local duration = tonumber(sec) or 10
-        triggerAlert("GUI: " .. location, duration)
+-- 3. Theo dõi âm thanh báo động / sấm sét trong Workspace & SoundService
+local function trackSound(sound)
+    if sound:IsA("Sound") then
+        local sName = string.lower(sound.Name)
+        if sName:find("alert") or sName:find("warn") or sName:find("thunder") or sName:find("lightning") or sName:find("strike") or sName:find("coi") or sName:find("alarm") then
+            sound.Played:Connect(function()
+                onLightningDetected("Âm thanh báo động: " .. sound.Name)
+            end)
+        end
     end
 end
 
-local function watchElement(elem)
-    if elem:IsA("TextLabel") or elem:IsA("TextButton") then
-        checkText(elem.Text, elem.Name)
-        elem:GetPropertyChangedSignal("Text"):Connect(function()
-            checkText(elem.Text, elem.Name)
-        end)
-    end
-end
+for _, s in ipairs(game:GetDescendants()) do trackSound(s) end
+game.DescendantAdded:Connect(trackSound)
 
--- Lắng nghe PlayerGui và CoreGui
-LocalPlayer:WaitForChild("PlayerGui").DescendantAdded:Connect(watchElement)
-for _, elem in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
-    watchElement(elem)
-end
-
-pcall(function()
-    CoreGui.DescendantAdded:Connect(watchElement)
-    for _, elem in ipairs(CoreGui:GetDescendants()) do
-        watchElement(elem)
+-- 4. Theo dõi thay đổi bầu trời / ánh sáng (Game thường chớp màn hình hoặc đổi màu khi có thiên tai)
+Lighting:GetPropertyChangedSignal("Brightness"):Connect(function()
+    if Lighting.Brightness > 5 then
+        onLightningDetected("Ánh sáng chớp Lighting")
     end
 end)
