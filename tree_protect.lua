@@ -1,4 +1,3 @@
--- Chờ game tải hoàn tất
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
@@ -8,70 +7,77 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Workspace = game:GetService("Workspace")
 
--- Từ khóa cảnh báo sét xuất hiện trên màn hình
-local ALERT_KEYWORDS = {"báo động đỏ", "cảnh báo", "sét sắp đánh", "thu hoạch ngay"}
+local isHarvesting = false
 
--- Hàm thực hiện hành động thu hoạch / nhặt cây
-local function autoHarvestTrees()
-    print("[CẢNH BÁO SÉT] Đang tự động nhặt/thu hoạch toàn bộ cây!")
+-- Hàm cưỡng chế kích hoạt toàn bộ ProximityPrompt phím E
+local function harvestTree()
+    if isHarvesting then return end
+    isHarvesting = true
+    
+    print("[ANTI-LIGHTNING] Đang thu hoạch cây trước khi sét đánh 1s...")
 
-    -- Cách 1: Tự động kích hoạt ProximityPrompt (nút giữ E/nhặt cây gần nhất)
     for _, prompt in ipairs(Workspace:GetDescendants()) do
         if prompt:IsA("ProximityPrompt") then
-            -- Bỏ qua thời gian giữ và kích hoạt ngay lập tức
+            -- Mở rộng tối đa phạm vi và bỏ thời gian chờ phím E
+            prompt.RequiresLineOfSight = false
+            prompt.MaxActivationDistance = math.huge
             prompt.HoldDuration = 0
-            prompt:InputHoldBegin()
-            task.wait()
-            prompt:InputHoldEnd()
-        end
-    end
-
-    -- Cách 2: Tự động gửi Remote thu hoạch (nếu game dùng RemoteEvent)
-    for _, remote in ipairs(game:GetDescendants()) do
-        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
-            local rName = string.lower(remote.Name)
-            if rName:find("harvest") or rName:find("collect") or rName:find("pickup") or rName:find("cay") or rName:find("tree") then
-                pcall(function()
-                    if remote:IsA("RemoteEvent") then
-                        remote:FireServer()
-                    end
-                end)
+            
+            -- Ưu tiên sử dụng hàm executor để giả lập ấn phím E chuẩn xác nhất
+            if fireproximityprompt then
+                fireproximityprompt(prompt)
+            else
+                prompt:InputHoldBegin()
+                task.wait(0.05)
+                prompt:InputHoldEnd()
             end
         end
     end
+
+    task.wait(2)
+    isHarvesting = false
 end
 
--- Hàm kiểm tra nội dung text cảnh báo
-local function checkText(textLabel)
-    if textLabel:IsA("TextLabel") or textLabel:IsA("TextButton") then
-        local text = string.lower(textLabel.Text)
-        for _, keyword in ipairs(ALERT_KEYWORDS) do
-            if string.find(text, keyword) then
-                autoHarvestTrees()
-                break
+-- Hàm tính toán thời gian từ thông báo cảnh báo
+local function processAlert(text)
+    local lowerText = string.lower(text)
+    
+    if string.find(lowerText, "báo động đỏ") or string.find(lowerText, "sét sắp đánh") or string.find(lowerText, "thu hoạch ngay") then
+        -- Tìm số giây (ví dụ: "trong 10s", "trong 5s", "1-10s", "10 giây")
+        local num = string.match(lowerText, "(%d+)%s*s") or string.match(lowerText, "%-(%d+)") or string.match(lowerText, "trong%s*(%d+)")
+        
+        if num then
+            local totalSeconds = tonumber(num)
+            if totalSeconds and totalSeconds > 1 then
+                local waitTime = totalSeconds - 1
+                print("[ANTI-LIGHTNING] Phát hiện sét! Đếm ngược: " .. totalSeconds .. "s. Chờ " .. waitTime .. "s để hái cây.")
+                task.delay(waitTime, harvestTree)
+                return
             end
         end
+        
+        -- Nếu thông báo không ghi rõ số hoặc thời gian còn <= 1s, kích hoạt ngay lập tức
+        harvestTree()
     end
 end
 
--- Theo dõi GUI khi có thông báo mới bật lên
-PlayerGui.DescendantAdded:Connect(function(child)
-    task.wait(0.1)
-    checkText(child)
-end)
-
--- Theo dõi nếu text của GUI đã có sẵn thay đổi nội dung sang cảnh báo sét
-for _, guiElement in ipairs(PlayerGui:GetDescendants()) do
-    if guiElement:IsA("TextLabel") or guiElement:IsA("TextButton") then
-        guiElement:GetPropertyChangedSignal("Text"):Connect(function()
-            checkText(guiElement)
+-- Lắng nghe các thông báo GUI
+local function scanElement(elem)
+    if elem:IsA("TextLabel") or elem:IsA("TextButton") then
+        processAlert(elem.Text)
+        elem:GetPropertyChangedSignal("Text"):Connect(function()
+            processAlert(elem.Text)
         end)
     end
 end
 
--- Thông báo kích hoạt thành công
+PlayerGui.DescendantAdded:Connect(scanElement)
+for _, elem in ipairs(PlayerGui:GetDescendants()) do
+    scanElement(elem)
+end
+
 game:GetService("StarterGui"):SetCore("SendNotification", {
     Title = "Auto Harvest Ready",
-    Text = "Hệ thống tự động hái cây khi có sét đã sẵn sàng!",
+    Text = "Hệ thống tự ấn E hái cây trước khi sét đánh 1s đã bật!",
     Duration = 5
 })
