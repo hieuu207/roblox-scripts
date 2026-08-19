@@ -1,138 +1,65 @@
+-- Chờ game tải xong
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
 local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local RootPart = Character:WaitForChild("HumanoidRootPart")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local BlockKeywords = {"lightning", "strike", "destroy", "damage", "storm", "burn", "killtree", "set"}
-local AlertKeywords = {"báo động", "sét", "thu hoạch", "cảnh báo", "lightning", "strike"}
-local isHarvesting = false
+-- Gửi thông báo ra màn hình và Chatbox
+local function sendAlert(message)
+    print("[SET-SPY] " .. message)
+    
+    -- Hiện thông báo góc phải màn hình
+    StarterGui:SetCore("SendNotification", {
+        Title = "⚡ PHÁT HIỆN SÉT ĐÁNH! ⚡",
+        Text = message,
+        Duration = 8
+    })
 
--- Hàm cưỡng chế nhặt toàn bộ cây
-local function forceHarvestAll()
-    if isHarvesting then return end
-    isHarvesting = true
-
-    print("[ANTI-LIGHTNING] Đang cưỡng chế nhặt toàn bộ cây...")
-
-    for _, prompt in ipairs(Workspace:GetDescendants()) do
-        if prompt:IsA("ProximityPrompt") then
-            task.spawn(function()
-                -- 1. Bỏ qua mọi giới hạn tương tác
-                prompt.RequiresLineOfSight = false
-                prompt.MaxActivationDistance = 9999
-                prompt.HoldDuration = 0
-
-                -- 2. Đưa nhân vật tới gần gốc cây trong tích tắc để hợp lệ hóa vị trí
-                local parentPart = prompt.Parent
-                if parentPart and parentPart:IsA("BasePart") and RootPart then
-                    local originalCFrame = RootPart.CFrame
-                    RootPart.CFrame = parentPart.CFrame + Vector3.new(0, 2, 0)
-                    task.wait(0.05)
-
-                    -- 3. Kích hoạt ProximityPrompt
-                    if fireproximityprompt then
-                        fireproximityprompt(prompt)
-                    else
-                        prompt:InputHoldBegin()
-                        task.wait(0.05)
-                        prompt:InputHoldEnd()
-                    end
-
-                    -- 4. Kích hoạt trực tiếp sự kiện Trigger
-                    pcall(function()
-                        prompt:InputHoldBegin()
-                        prompt:InputHoldEnd()
-                    end)
-
-                    task.wait(0.05)
-                    RootPart.CFrame = originalCFrame
-                end
-            end)
+    -- Đẩy vào khung chat trong game
+    pcall(function()
+        local TextChatService = game:GetService("TextChatService")
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            TextChatService.TextChannels.RBXGeneral:DisplaySystemMessage("[CẢNH BÁO SÉT]: " .. message)
+        else
+            game:GetService("ReplicatedStorage"):WaitForChild("DefaultChatSystemChatEvents"):WaitForChild("SayMessageRequest"):FireServer("[CẢNH BÁO]: " .. message, "All")
         end
-    end
-
-    task.wait(1.5)
-    isHarvesting = false
+    end)
 end
 
--- Hàm đọc và tính toán thời gian cảnh báo
-local function checkAlert(text)
-    if typeof(text) ~= "string" then return end
-    local lowerText = string.lower(text)
+-- Kiểm tra nội dung text
+local function checkText(str)
+    if typeof(str) ~= "string" or str == "" then return end
+    local lower = string.lower(str)
 
-    for _, kw in ipairs(AlertKeywords) do
-        if string.find(lowerText, kw) then
-            -- Bắt các dạng số: "1-10s", "10s", "10 giây", "10"
-            local num = string.match(lowerText, "%-(%d+)") or string.match(lowerText, "(%d+)%s*s") or string.match(lowerText, "trong%s*(%d+)") or string.match(lowerText, "(%d+)")
-            
-            if num then
-                local sec = tonumber(num)
-                if sec and sec > 1 then
-                    print("[ANTI-LIGHTNING] Phát hiện cảnh báo: " .. sec .. "s. Hẹn giờ hái trước 1s!")
-                    task.delay(sec - 1, forceHarvestAll)
-                    return
-                end
-            end
-
-            forceHarvestAll()
-            break
+    if lower:find("sét") or lower:find("báo động") or lower:find("thu hoạch") or lower:find("cảnh báo") or lower:find("lightning") then
+        -- Trích xuất thời gian xuất hiện trong câu
+        local seconds = string.match(lower, "(%d+)%s*s") or string.match(lower, "trong%s*(%d+)") or string.match(lower, "%-(%d+)") or string.match(lower, "(%d+)")
+        
+        if seconds then
+            sendAlert("Thời gian sét đánh sau: " .. seconds .. " GIÂY! (Nội dung: " .. str .. ")")
+        else
+            sendAlert("Nội dung cảnh báo: " .. str)
         end
     end
 end
 
--- Quét toàn bộ GUI của người chơi
-local function bindGui(elem)
+-- Theo dõi tất cả UI hiện có và UI mới xuất hiện
+local function scanElement(elem)
     if elem:IsA("TextLabel") or elem:IsA("TextButton") then
-        checkAlert(elem.Text)
+        checkText(elem.Text)
         elem:GetPropertyChangedSignal("Text"):Connect(function()
-            checkAlert(elem.Text)
+            checkText(elem.Text)
         end)
     end
 end
 
-LocalPlayer.PlayerGui.DescendantAdded:Connect(bindGui)
-for _, elem in ipairs(LocalPlayer.PlayerGui:GetDescendants()) do
-    bindGui(elem)
+PlayerGui.DescendantAdded:Connect(scanElement)
+for _, elem in ipairs(PlayerGui:GetDescendants()) do
+    scanElement(elem)
 end
 
--- Hook chặn các luồng Remote gây hại
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local method = getnamecallmethod()
-    if method == "FireServer" or method == "InvokeServer" then
-        local remoteName = string.lower(tostring(self.Name))
-        for _, keyword in ipairs(BlockKeywords) do
-            if string.find(remoteName, keyword) then
-                return nil
-            end
-        end
-    end
-    return oldNamecall(self, ...)
-end)
-
--- Tự động triệt tiêu Part sét trong Workspace
-Workspace.DescendantAdded:Connect(function(child)
-    task.wait()
-    local name = string.lower(tostring(child.Name))
-    for _, kw in ipairs(BlockKeywords) do
-        if string.find(name, kw) then
-            if child:IsA("BasePart") then
-                child.CanTouch = false
-                child.CanCollide = false
-            end
-            pcall(function() child:Destroy() end)
-            break
-        end
-    end
-end)
-
-game:GetService("StarterGui"):SetCore("SendNotification", {
-    Title = "Anti-Lightning v2",
-    Text = "Đã tối ưu hóa nhặt cây bằng dịch chuyển & kích hoạt cưỡng chế!",
-    Duration = 5
-})
+sendAlert("Trình theo dõi thời gian sét đánh đã bật thành công!")
