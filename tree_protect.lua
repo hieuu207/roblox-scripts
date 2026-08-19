@@ -1,29 +1,35 @@
+-- Chờ game tải xong
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local Workspace = game:GetService("Workspace")
+
+-- Danh sách từ khóa liên quan đến sét / thiên tai / phá cây
+local BlockKeywords = {"lightning", "strike", "destroy", "damage", "storm", "burn", "killtree", "set"}
+local AlertKeywords = {"báo động đỏ", "sét sắp đánh", "thu hoạch ngay", "cảnh báo"}
 
 local isHarvesting = false
 
--- Hàm cưỡng chế kích hoạt toàn bộ ProximityPrompt phím E
+-- Hàm cưỡng chế bấm phím E để nhặt cây
 local function harvestTree()
     if isHarvesting then return end
     isHarvesting = true
-    
-    print("[ANTI-LIGHTNING] Đang thu hoạch cây trước khi sét đánh 1s...")
+
+    print("[Anti-Lightning] Đang tự động bấm E nhặt toàn bộ cây...")
 
     for _, prompt in ipairs(Workspace:GetDescendants()) do
         if prompt:IsA("ProximityPrompt") then
-            -- Mở rộng tối đa phạm vi và bỏ thời gian chờ phím E
+            -- Mở rộng tối đa phạm vi và bỏ thời gian giữ phím E
             prompt.RequiresLineOfSight = false
             prompt.MaxActivationDistance = math.huge
             prompt.HoldDuration = 0
-            
-            -- Ưu tiên sử dụng hàm executor để giả lập ấn phím E chuẩn xác nhất
+
+            -- Kích hoạt phím E
             if fireproximityprompt then
                 fireproximityprompt(prompt)
             else
@@ -38,31 +44,34 @@ local function harvestTree()
     isHarvesting = false
 end
 
--- Hàm tính toán thời gian từ thông báo cảnh báo
+-- Hàm trích xuất thời gian đếm ngược và hẹn giờ nhặt trước 1s
 local function processAlert(text)
     local lowerText = string.lower(text)
-    
-    if string.find(lowerText, "báo động đỏ") or string.find(lowerText, "sét sắp đánh") or string.find(lowerText, "thu hoạch ngay") then
-        -- Tìm số giây (ví dụ: "trong 10s", "trong 5s", "1-10s", "10 giây")
-        local num = string.match(lowerText, "(%d+)%s*s") or string.match(lowerText, "%-(%d+)") or string.match(lowerText, "trong%s*(%d+)")
-        
-        if num then
-            local totalSeconds = tonumber(num)
-            if totalSeconds and totalSeconds > 1 then
-                local waitTime = totalSeconds - 1
-                print("[ANTI-LIGHTNING] Phát hiện sét! Đếm ngược: " .. totalSeconds .. "s. Chờ " .. waitTime .. "s để hái cây.")
-                task.delay(waitTime, harvestTree)
-                return
+
+    for _, keyword in ipairs(AlertKeywords) do
+        if string.find(lowerText, keyword) then
+            -- Trích xuất số giây (ví dụ: "trong 10s", "1-10s", "10s", "trong 5")
+            local num = string.match(lowerText, "%-(%d+)") or string.match(lowerText, "(%d+)%s*s") or string.match(lowerText, "trong%s*(%d+)")
+            
+            if num then
+                local totalSec = tonumber(num)
+                if totalSec and totalSec > 1 then
+                    local delayTime = totalSec - 1
+                    print("[Anti-Lightning] Phát hiện cảnh báo sét (" .. totalSec .. "s)! Sẽ tự động bấm E sau " .. delayTime .. "s.")
+                    task.delay(delayTime, harvestTree)
+                    return
+                end
             end
+
+            -- Nếu thời gian còn <= 1s hoặc không tìm thấy số, nhặt ngay
+            harvestTree()
+            break
         end
-        
-        -- Nếu thông báo không ghi rõ số hoặc thời gian còn <= 1s, kích hoạt ngay lập tức
-        harvestTree()
     end
 end
 
--- Lắng nghe các thông báo GUI
-local function scanElement(elem)
+-- 1. Lắng nghe thông báo đếm ngược trên giao diện màn hình
+local function scanGui(elem)
     if elem:IsA("TextLabel") or elem:IsA("TextButton") then
         processAlert(elem.Text)
         elem:GetPropertyChangedSignal("Text"):Connect(function()
@@ -71,13 +80,53 @@ local function scanElement(elem)
     end
 end
 
-PlayerGui.DescendantAdded:Connect(scanElement)
+PlayerGui.DescendantAdded:Connect(scanGui)
 for _, elem in ipairs(PlayerGui:GetDescendants()) do
-    scanElement(elem)
+    scanGui(elem)
 end
 
+-- 2. Hook chặn RemoteEvents từ Server gửi xuống (hoặc Client gửi lên)
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+
+    if method == "FireServer" or method == "InvokeServer" then
+        local remoteName = string.lower(tostring(self.Name))
+        for _, keyword in ipairs(BlockKeywords) do
+            if string.find(remoteName, keyword) then
+                warn("[Anti-Lightning] Đã chặn Remote gọi gây hại: " .. self.Name)
+                return nil
+            end
+        end
+    end
+
+    return oldNamecall(self, ...)
+end)
+
+-- 3. Tự động tìm và xoá Part/Hitbox sét rơi vào vùng cây trong Workspace
+Workspace.DescendantAdded:Connect(function(child)
+    task.wait()
+    local childName = string.lower(tostring(child.Name))
+
+    for _, keyword in ipairs(BlockKeywords) do
+        if string.find(childName, keyword) then
+            if child:IsA("BasePart") then
+                child.CanTouch = false
+                child.CanCollide = false
+            end
+            pcall(function()
+                child:Destroy()
+            end)
+            print("[Anti-Lightning] Đã vô hiệu hóa vật thể sét: " .. childName)
+            break
+        end
+    end
+end)
+
+-- Thông báo kích hoạt thành công
 game:GetService("StarterGui"):SetCore("SendNotification", {
-    Title = "Auto Harvest Ready",
-    Text = "Hệ thống tự ấn E hái cây trước khi sét đánh 1s đã bật!",
+    Title = "Anti-Lightning Loaded",
+    Text = "Hệ thống tự hái cây trước 1s & chặn sét đã bật!",
     Duration = 5
 })
