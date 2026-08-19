@@ -4,166 +4,101 @@ end
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- 1. Tạo Giao diện Thông báo & Đếm ngược
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "ControllerLightningWatcher"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = PlayerGui
+local isFarming = false
 
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 360, 0, 90)
-Frame.Position = UDim2.new(0.5, -180, 0.05, 0)
-Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-Frame.BorderSizePixel = 2
-Frame.BorderColor3 = Color3.fromRGB(0, 255, 120)
-Frame.Active = true
-Frame.Draggable = true
-Frame.Parent = ScreenGui
+-- Hàm giả lập ấn bàn phím vật lý (Cách trị Executor lỗi fireproximityprompt)
+local function ForceCollect()
+    if isFarming then return end
+    isFarming = true
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0.4, 0)
-Title.BackgroundTransparency = 1
-Title.TextColor3 = Color3.fromRGB(255, 220, 0)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 15
-Title.Text = "⚡ TỰ ĐỘNG THU HOẠCH SÉT ĐÁNH ⚡"
-Title.Parent = Frame
-
-local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1, -16, 0.55, 0)
-Status.Position = UDim2.new(0, 8, 0.4, 0)
-Status.BackgroundTransparency = 1
-Status.TextColor3 = Color3.fromRGB(200, 255, 200)
-Status.Font = Enum.Font.Gotham
-Status.TextSize = 13
-Status.TextWrapped = true
-Status.Text = "🟢 Trạng thái: Đang theo dõi cây & tín hiệu máy chủ..."
-Status.Parent = Frame
-
-local isHarvesting = false
-
--- 2. Hàm cưỡng chế bấm E (Sưu tầm) vào gốc cây của bạn
-local function collectTree()
-    if isHarvesting then return end
-    isHarvesting = true
-
-    print("[AUTO-COLLECT] Đang tự động nhặt/sưu tầm cây!")
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then 
+        isFarming = false
+        return 
+    end
     
+    print("[HỆ THỐNG] Đang dịch chuyển và ấn E...")
+
     for _, prompt in ipairs(Workspace:GetDescendants()) do
         if prompt:IsA("ProximityPrompt") then
             local action = string.lower(prompt.ActionText or "")
-            local obj = string.lower(prompt.ObjectText or "")
-            
-            -- Bắt đúng phím E 'Sưu tầm' hoặc tương tác cây
-            if action:find("sưu tầm") or action:find("suu tam") or action:find("collect") or action:find("harvest") or obj:find("cây") or obj:find("cay") then
-                prompt.RequiresLineOfSight = false
-                prompt.MaxActivationDistance = 99999
-                prompt.HoldDuration = 0
-
-                if fireproximityprompt then
-                    fireproximityprompt(prompt)
-                else
-                    prompt:InputHoldBegin()
-                    task.wait(0.05)
-                    prompt:InputHoldEnd()
+            if action:find("sưu tầm") or action:find("nhặt") or action:find("thu hoạch") then
+                local part = prompt.Parent
+                if part and part:IsA("BasePart") then
+                    -- 1. Lưu vị trí cũ và Dịch chuyển nhân vật sát thẳng vào gốc cây
+                    local oldCFrame = char.HumanoidRootPart.CFrame
+                    char.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0, 2, 0)
+                    task.wait(0.2) -- Đợi game nhận diện vị trí
+                    
+                    -- 2. Giả lập phần cứng đè phím E
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(prompt.HoldDuration + 0.1) -- Giữ phím E theo thời gian yêu cầu của game
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    
+                    task.wait(0.1)
+                    -- Trả nhân vật về chỗ cũ
+                    char.HumanoidRootPart.CFrame = oldCFrame
                 end
             end
         end
     end
-
-    task.wait(1.5)
-    isHarvesting = false
+    
+    task.wait(2)
+    isFarming = false
 end
 
--- 3. Hàm kích hoạt cảnh báo & hẹn giờ nhặt cây
-local isAlerting = false
-local function triggerLightningAlert(sourceName, countdown)
-    if isAlerting then return end
-    isAlerting = true
-
-    Frame.BorderColor3 = Color3.fromRGB(255, 50, 50)
-    local timeLeft = countdown or 10
-
-    task.spawn(function()
-        for i = timeLeft, 1, -1 do
-            Status.TextColor3 = Color3.fromRGB(255, 80, 80)
-            Status.Text = string.format("🚨 SÉT ĐÁNH SAU: %d GIÂY!\n(Nguồn: %s)", i, sourceName)
+-- Hàm đọc text thông báo của game
+local function ReadAlert(textStr)
+    if typeof(textStr) ~= "string" then return end
+    local txt = string.lower(textStr)
+    
+    -- Nếu bắt được đúng dòng chữ cảnh báo sét của game
+    if txt:find("sét sắp đánh") or txt:find("thu hoạch ngay") or txt:find("báo động đỏ") then
+        -- Lọc ra con số giây đếm ngược trong thông báo (VD: "trong 10s")
+        local secNum = string.match(txt, "(%d+)%s*s") or string.match(txt, "trong%s*(%d+)") or string.match(txt, "%-(%d+)")
+        local seconds = tonumber(secNum)
+        
+        if seconds and seconds > 1 then
+            local waitTime = seconds - 1.5 -- Thu hoạch trước 1.5 giây để bù độ trễ ping
+            print("[CẢNH BÁO] Sét đánh sau " .. seconds .. "s. Sẽ hái cây sau " .. waitTime .. "s!")
             
-            -- Tự động nhặt cây khi còn đúng 1 giây (hoặc nếu thời gian quá gấp thì nhặt ngay)
-            if i <= 1 then
-                collectTree()
-            end
-            task.wait(1)
+            task.delay(waitTime, function()
+                ForceCollect()
+            end)
+        else
+            -- Nếu thời gian quá gấp (dưới 1s) hoặc không tìm thấy số, nhặt ngay lập tức
+            ForceCollect()
         end
-
-        collectTree() -- Đảm bảo nhặt dứt điểm
-        Status.TextColor3 = Color3.fromRGB(255, 255, 100)
-        Status.Text = "💥 ĐÃ TỰ ĐỘNG SƯU TẦM CÂY VÀO TÚI ĐỒ!"
-        task.wait(3)
-
-        Status.TextColor3 = Color3.fromRGB(200, 255, 200)
-        Status.Text = "🟢 Trạng thái: Đang theo dõi cây & tín hiệu máy chủ..."
-        Frame.BorderColor3 = Color3.fromRGB(0, 255, 120)
-        isAlerting = false
-    end)
+    end
 end
 
--- 4. Hook trực tiếp vào các Controllers trong ReplicatedStorage.Client.Controllers
-task.spawn(function()
-    pcall(function()
-        for _, module in ipairs(ReplicatedStorage:GetDescendants()) do
-            if module:IsA("ModuleScript") then
-                local mName = string.lower(module.Name)
-                if mName:find("disaster") or mName:find("weather") or mName:find("lightning") or mName:find("event") or mName:find("alert") or mName:find("notification") then
-                    local controller = require(module)
-                    if type(controller) == "table" then
-                        for k, v in pairs(controller) do
-                            if type(v) == "function" then
-                                local oldFunc = v
-                                controller[k] = function(...)
-                                    triggerLightningAlert("Controller: " .. module.Name, 10)
-                                    return oldFunc(...)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end)
-end)
-
--- 5. Lắng nghe mọi tín hiệu RemoteEvent từ Server gửi về
-for _, obj in ipairs(game:GetDescendants()) do
-    if obj:IsA("RemoteEvent") then
-        obj.OnClientEvent:Connect(function(...)
-            local eName = string.lower(obj.Name)
-            if eName:find("lightning") or eName:find("disaster") or eName:find("weather") or eName:find("storm") or eName:find("alert") or eName:find("set") then
-                triggerLightningAlert("Remote: " .. obj.Name, 10)
-            end
+-- Quét toàn bộ TextLabel đang có trên màn hình
+for _, gui in ipairs(PlayerGui:GetDescendants()) do
+    if gui:IsA("TextLabel") or gui:IsA("TextButton") then
+        gui:GetPropertyChangedSignal("Text"):Connect(function()
+            ReadAlert(gui.Text)
         end)
     end
 end
 
--- 6. Quét giao diện thông báo màu đỏ xuất hiện ở góc màn hình
+-- Quét các thông báo mới hiện ra sau này
 PlayerGui.DescendantAdded:Connect(function(child)
+    task.wait(0.1)
     if child:IsA("TextLabel") or child:IsA("TextButton") then
-        local checkText = function()
-            local t = string.lower(child.Text)
-            if t:find("sét") or t:find("báo động") or t:find("thu hoạch") then
-                local num = string.match(t, "(%d+)%s*s") or string.match(t, "%-(%d+)") or string.match(t, "(%d+)")
-                local sec = tonumber(num) or 10
-                triggerLightningAlert("Thông báo GUI", sec)
-            end
-        end
-        child:GetPropertyChangedSignal("Text"):Connect(checkText)
-        child:GetPropertyChangedSignal("Visible"):Connect(function()
-            if child.Visible then checkText() end
+        child:GetPropertyChangedSignal("Text"):Connect(function()
+            ReadAlert(child.Text)
         end)
-        checkText()
+        ReadAlert(child.Text)
     end
 end)
+
+-- Thông báo kích hoạt
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "Virtual Input Bypassed",
+    Text = "Đã dùng lệnh giả lập bàn phím để trị Executor lởm!",
+    Duration = 5
+})
